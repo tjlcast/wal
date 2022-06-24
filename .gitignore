@@ -1,3 +1,6 @@
 testlog
 .idea
 vendor
+
+*.tar
+*.dat

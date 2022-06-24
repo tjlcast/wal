@@ -354,13 +354,13 @@ func (l *Log) cycle() error {
 func appendJSONEntry(dst []byte, index uint64, data []byte) (out []byte,
 	epos bpos) {
 	// {"index":number,"data":string}
-	mark := len(dst)
+	pos := len(dst)
 	dst = append(dst, `{"index":"`...)
 	dst = strconv.AppendUint(dst, index, 10)
 	dst = append(dst, `","data":`...)
 	dst = appendJSONData(dst, data)
 	dst = append(dst, '}', '\n')
-	return dst, bpos{mark, len(dst)}
+	return dst, bpos{pos, len(dst)}
 }
 
 func appendJSONData(dst []byte, s []byte) []byte {
@@ -604,7 +604,17 @@ func (l *Log) loadSegment(index uint64) (*segment, error) {
 	}
 	// find in the segment array
 	idx := l.findSegment(index)
-	s := l.segments[idx]
+	s, err := l.loadSegmentByPos(idx)
+	if err != nil {
+		return nil, err
+	}
+
+	return s, nil
+}
+
+func (l *Log) loadSegmentByPos(pos int) (*segment, error) {
+	// find in the segment array
+	s := l.segments[pos]
 	if len(s.epos) == 0 {
 		// load the entries from cache
 		if err := l.loadSegmentEntries(s); err != nil {
@@ -612,7 +622,7 @@ func (l *Log) loadSegment(index uint64) (*segment, error) {
 		}
 	}
 	// push the segment to the front of the cache
-	l.pushCache(idx)
+	l.pushCache(pos)
 	return s, nil
 }
 
@@ -632,6 +642,11 @@ func (l *Log) Read(index uint64) (data []byte, err error) {
 	if err != nil {
 		return nil, err
 	}
+
+	return l.readFromSegment(index, s)
+}
+
+func (l *Log) readFromSegment(index uint64, s *segment) (data []byte, err error) {
 	epos := s.epos[index-s.index]
 	edata := s.ebuf[epos.pos:epos.end]
 	if l.opts.LogFormat == JSON {
@@ -724,6 +739,14 @@ func (l *Log) truncateFront(index uint64) (err error) {
 	if err != nil {
 		return err
 	}
+
+	// tjl
+	if int(index - s.index) >= len(s.epos) {
+		segIdx = segIdx + 1
+		s, err = l.loadSegmentByPos(segIdx)
+		index = s.index
+	}
+
 	epos := s.epos[index-s.index:]
 	ebuf := s.ebuf[epos[0].pos:]
 	// Create a temp file contains the truncated segment.
@@ -830,7 +853,14 @@ func (l *Log) truncateBack(index uint64) (err error) {
 	if err != nil {
 		return err
 	}
-	epos := s.epos[:index-s.index+1]
+
+	// tjl
+	reserverEnd := index-s.index+1
+	if int(reserverEnd) > len(s.epos) {
+		reserverEnd = uint64(len(s.epos))
+	}
+
+	epos := s.epos[:reserverEnd]
 	ebuf := s.ebuf[:epos[len(epos)-1].end]
 	// Create a temp file contains the truncated segment.
 	tempName := filepath.Join(l.path, "TEMP")
@@ -914,4 +944,69 @@ func (l *Log) Sync() error {
 		return ErrClosed
 	}
 	return l.sfile.Sync()
+}
+
+func (l *Log) Iterator() *logIterator {
+	it := &logIterator{
+		FistIndex: l.firstIndex,
+		LastIndex: l.lastIndex,
+		firstSegPos: l.findSegment(l.firstIndex),
+		lastSegPos: l.findSegment(l.lastIndex),
+		currentIndex: l.firstIndex,
+		currentSegPos: l.findSegment(l.firstIndex),
+		carr: true,
+	}
+	return it
+}
+
+func (l *Log) ItNext(it *logIterator) ([]byte, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if l.corrupt {
+		return nil, ErrCorrupt
+	} else if l.closed {
+		return nil, ErrClosed
+	}
+
+	loadSegment, e := l.loadSegmentByPos(it.currentSegPos)
+	if it.carr {
+		it.currentIndex = loadSegment.index
+		it.carr = false
+	}
+	if e != nil {
+		return nil, e
+	}
+	data, e := l.readFromSegment(it.currentIndex, loadSegment)
+
+	if it.currentIndex == 129805 {
+		fmt.Printf("")
+	}
+	if int(it.currentIndex+1) > int(loadSegment.index) + len(loadSegment.epos) - 1 {
+		it.currentSegPos += 1
+		it.carr = true
+	} else {
+		it.currentIndex += 1
+	}
+
+	return data, nil
+}
+
+func (l *Log) ItEmpry(it *logIterator) bool {
+	if it.currentSegPos < it.firstSegPos || it.currentSegPos > it.lastSegPos {
+		return true
+	}
+	return false
+}
+
+type logIterator struct {
+	FistIndex uint64
+	LastIndex uint64
+
+	firstSegPos  int
+	lastSegPos   int
+
+	currentSegPos int
+	currentIndex uint64
+
+	carr bool
 }
