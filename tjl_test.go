@@ -1,11 +1,14 @@
 package wal
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 
 
 func Test_demo(t *testing.T) {
-	logPath:="1655903359.dat"
+	logPath:="testlog"
 
 	opts := DefaultOptions
 	opts.SegmentSize = int(1<<20)
@@ -43,7 +46,10 @@ func Test_demo(t *testing.T) {
 
 	t.Logf("old %d new %d.\n", oldNum, newNum)
 
-	err = l.TruncateBack(500000)
+	index, err := l.LastIndex()
+	midPos := uint64(index/2)
+	fmt.Printf("midPos: %d\n", int(midPos))
+	err = l.TruncateBack(midPos)
 	if err != nil {
 		panic(err)
 	}
