@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"unicode/utf8"
 	"unsafe"
 
@@ -79,6 +80,8 @@ type Options struct {
 	// Perms represents the datafiles modes and permission bits
 	DirPerms  os.FileMode
 	FilePerms os.FileMode
+
+	MMap bool
 }
 
 // DefaultOptions for Open().
@@ -90,6 +93,7 @@ var DefaultOptions = &Options{
 	NoCopy:           false,    // Make a new copy of data for every Read call.
 	DirPerms:         0750,     // Permissions for the created directories
 	FilePerms:        0640,     // Permissions for the created data files
+	MMap: false,
 }
 
 // Log represents a write ahead log
@@ -113,6 +117,7 @@ type segment struct {
 	index uint64 // first index of segment
 	ebuf  []byte // cached entries buffer
 	epos  []bpos // cached entries positions in buffer
+	mmap  bool
 }
 
 type bpos struct {
@@ -166,6 +171,12 @@ func (l *Log) pushCache(segIdx int) {
 		l.scache.SetEvicted(segIdx, l.segments[segIdx])
 	if evicted {
 		s := v.(*segment)
+		if s.mmap {
+			err := syscall.Munmap(s.ebuf)
+			if err!=nil {
+				panic(err)
+			}
+		}
 		s.ebuf = nil
 		s.epos = nil
 	}
@@ -529,30 +540,67 @@ func (l *Log) findSegment(index uint64) int {
 	return i - 1
 }
 
+
 func (l *Log) loadSegmentEntries(s *segment) error {
-	data, err := ioutil.ReadFile(s.path)
-	if err != nil {
-		return err
+	return l.loadSegmentEntriesV2(s, false)
+}
+
+func (l *Log) loadSegmentEntriesV2(s *segment, isMmap bool) error {
+	// 把二进制数据读入 data, 最后作为 ebuf
+	var err error
+	var data []byte
+	file, err := os.OpenFile(s.path, os.O_RDWR, l.opts.FilePerms)
+	// os.O_CREATE|os.O_RDWR|os.O_TRUNC, l.opts.FilePerms
+	info, err := file.Stat()
+	if isMmap {
+		fmt.Printf("MMap")
+		if err != nil {
+			panic(err)
+		}
+		//fmt.Println("The name of data is:{}.", s.path)
+		//fmt.Println("The length of mmap data is:{}.", info.Size())
+		if err != nil {
+			panic(err)
+		}
+		// read -> mmap
+		data, err = syscall.Mmap(int(file.Fd()), 0, int(info.Size()), syscall.PROT_WRITE|syscall.PROT_READ, syscall.MAP_SHARED)
+		if err != nil {
+			panic(err)
+		}
+		//fmt.Println("The length of mmap data is:{}.", len(data))
+	} else {
+		fmt.Printf("File")
+		data, err = ioutil.ReadFile(s.path)
 	}
+	//fmt.Println("The info of data is: ", info.Size())
+
 	ebuf := data
+	//fmt.Println("The size of data is: ", len(data))
+	//fmt.Println("The size of ebuf is: ", len(ebuf))
 	var epos []bpos
-	var pos int
+	var pos int // 当前数据位于 data 的下标
+	// 根据二进制数据 data的格式解析，生成每个文件的 epos.
 	for exidx := s.index; len(data) > 0; exidx++ {
 		var n int
 		if l.opts.LogFormat == JSON {
 			n, err = loadNextJSONEntry(data)
 		} else {
+			// n: 为 data 的第一条数据长度
 			n, err = loadNextBinaryEntry(data)
 		}
 		if err != nil {
 			return err
 		}
+		// 迭增规则，跳过第一条数据，指向后续数据
 		data = data[n:]
 		epos = append(epos, bpos{pos, pos + n})
 		pos += n
 	}
 	s.ebuf = ebuf
 	s.epos = epos
+	s.mmap = isMmap
+
+	//fmt.Println("The size of s'ebuf is: ", len(s.ebuf))
 	return nil
 }
 
@@ -700,9 +748,16 @@ func (l *Log) ClearCache() error {
 	l.clearCache()
 	return nil
 }
+
 func (l *Log) clearCache() {
 	l.scache.Range(func(_, v interface{}) bool {
 		s := v.(*segment)
+		if s.mmap {
+			err := syscall.Munmap(s.ebuf)
+			if err != nil {
+				panic(err)
+			}
+		}
 		s.ebuf = nil
 		s.epos = nil
 		return true
