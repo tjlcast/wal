@@ -17,7 +17,7 @@ A simple and fast write ahead log for Go.
 To start using `wal`, install Go and run `go get`:
 
 ```sh
-$ go get -u github.com/tidwall/wal
+$ go get -u github.com/tjlcast/wal
 ```
 
 This will retrieve the library.
