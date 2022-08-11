@@ -553,7 +553,7 @@ func (l *Log) loadSegmentEntriesV2(s *segment, isMmap bool) error {
 	// os.O_CREATE|os.O_RDWR|os.O_TRUNC, l.opts.FilePerms
 	info, err := file.Stat()
 	if isMmap {
-		fmt.Printf("MMap")
+		//fmt.Printf("MMap")
 		if err != nil {
 			panic(err)
 		}
@@ -569,7 +569,7 @@ func (l *Log) loadSegmentEntriesV2(s *segment, isMmap bool) error {
 		}
 		//fmt.Println("The length of mmap data is:{}.", len(data))
 	} else {
-		fmt.Printf("File")
+		//fmt.Printf("File")
 		data, err = ioutil.ReadFile(s.path)
 	}
 	//fmt.Println("The info of data is: ", info.Size())
