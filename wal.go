@@ -542,7 +542,7 @@ func (l *Log) findSegment(index uint64) int {
 
 
 func (l *Log) loadSegmentEntries(s *segment) error {
-	return l.loadSegmentEntriesV2(s, false)
+	return l.loadSegmentEntriesV2(s, l.opts.MMap)
 }
 
 func (l *Log) loadSegmentEntriesV2(s *segment, isMmap bool) error {
